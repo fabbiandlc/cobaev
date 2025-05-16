@@ -14,7 +14,6 @@ import {
   AppState,
 } from "react-native"
 import { Calendar, type DateData } from "react-native-calendars"
-import * as DocumentPicker from "expo-document-picker"
 import * as Notifications from 'expo-notifications';
 import { useTheme } from "../context/ThemeContext"
 import { Feather } from "@expo/vector-icons"
@@ -31,15 +30,15 @@ Notifications.setNotificationHandler({
 });
 
 type TaskStatus = "pending" | "in_progress" | "completed"
+type UrgencyLevel = 'baja' | 'media' | 'alta'
 
 interface Task {
   id: string
   name: string
   description: string
   date: string
-  creatorAttachment?: { name: string; uri: string }
-  collaboratorAttachment?: { name: string; uri: string }
   status: TaskStatus
+  urgency: UrgencyLevel
 }
 
 const statusColors = {
@@ -52,6 +51,12 @@ const statusLabels = {
   pending: "Pendiente",
   in_progress: "En Progreso",
   completed: "Completado",
+}
+
+const urgencyColors = {
+  baja: '#4CAF50',  // Verde
+  media: '#FFC107', // Amarillo
+  alta: '#F44336'   // Rojo
 }
 
 export default function ActivitiesScreen() {
@@ -67,8 +72,7 @@ export default function ActivitiesScreen() {
   // Form state
   const [name, setName] = useState("")
   const [description, setDescription] = useState("")
-  const [creatorAttachment, setCreatorAttachment] = useState<{ name: string; uri: string } | null>(null)
-  const [collaboratorAttachment, setCollaboratorAttachment] = useState<{ name: string; uri: string } | null>(null)
+  const [urgency, setUrgency] = useState<UrgencyLevel>('media')
 
   // Configurar notificaciones al montar el componente
   useEffect(() => {
@@ -165,18 +169,16 @@ export default function ActivitiesScreen() {
   const resetForm = () => {
     setName("")
     setDescription("")
-    setCreatorAttachment(null)
-    setCollaboratorAttachment(null)
+    setUrgency('media')
     setEditingTask(null)
   }
 
-  const openForm = (task?: Task) => {
+  const openForm = (task: Task | null = null) => {
     if (task) {
       setEditingTask(task)
       setName(task.name)
       setDescription(task.description)
-      setCreatorAttachment(task.creatorAttachment || null)
-      setCollaboratorAttachment(task.collaboratorAttachment || null)
+      setUrgency(task.urgency)
     } else {
       setEditingTask(null)
       resetForm()
@@ -191,10 +193,10 @@ export default function ActivitiesScreen() {
 
   const handleSave = async () => {
     if (!name.trim()) {
-      Alert.alert("Error", "El nombre de la tarea es obligatorio")
+      Alert.alert("Error", "Por favor ingresa un nombre para la tarea")
       return
     }
-    
+
     if (editingTask) {
       setTasks(
         tasks.map((t) =>
@@ -203,26 +205,22 @@ export default function ActivitiesScreen() {
                 ...t,
                 name,
                 description,
-                creatorAttachment: creatorAttachment || undefined,
-                collaboratorAttachment: collaboratorAttachment || undefined,
+                urgency,
               }
             : t
         )
       )
     } else {
-      const newTask = {
+      const newTask: Task = {
         id: Date.now().toString(),
         name,
         description,
         date: selectedDate,
-        creatorAttachment: creatorAttachment || undefined,
-        collaboratorAttachment: collaboratorAttachment || undefined,
         status: "pending" as const,
+        urgency,
       };
       
-      setTasks([...tasks, newTask]);
-      
-      // Programar notificación para la nueva tarea
+      setTasks([...tasks, newTask])
       await schedulePushNotification(newTask);
     }
     closeForm()
@@ -239,15 +237,6 @@ export default function ActivitiesScreen() {
     ])
   }
 
-  const handlePickFile = async (type: "creator" | "collaborator") => {
-    const result = await DocumentPicker.getDocumentAsync({ copyToCacheDirectory: true })
-    if (result.type === "success") {
-      const file = { name: result.name, uri: result.uri }
-      if (type === "creator") setCreatorAttachment(file)
-      else setCollaboratorAttachment(file)
-    }
-  }
-
   const handleStatusChange = (task: Task) => {
     const nextStatus: TaskStatus =
       task.status === "pending"
@@ -259,26 +248,43 @@ export default function ActivitiesScreen() {
   }
 
   const renderTask = ({ item }: { item: Task }) => (
-    <TouchableOpacity
-      style={[styles.card, { backgroundColor: colors.card }]}
-      onPress={() => openForm(item)}
-    >
-      <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
-        <View>
+    <View style={[styles.card, { 
+      backgroundColor: colors.card,
+      borderLeftWidth: 6,
+      borderLeftColor: urgencyColors[item.urgency]
+    }]}>
+      <TouchableOpacity onPress={() => openForm(item)} style={{ flex: 1 }}>
+        <View style={styles.cardHeader}>
           <Text style={[styles.cardTitle, { color: colors.text }]}>{item.name}</Text>
-          <Text style={{ color: colors.text }}>{item.description}</Text>
+          <View style={[
+            styles.urgencyBadge,
+            { backgroundColor: urgencyColors[item.urgency] + '33' } // Agregar transparencia
+          ]}>
+            <Text style={styles.urgencyText}>
+              {item.urgency.charAt(0).toUpperCase() + item.urgency.slice(1)}
+            </Text>
+          </View>
         </View>
+        <Text style={[styles.cardDescription, { color: colors.text }]}>{item.description}</Text>
+      </TouchableOpacity>
+      <View style={styles.cardActions}>
         <TouchableOpacity
           style={[styles.statusButton, { backgroundColor: statusColors[item.status] }]}
           onPress={(e) => {
-            e.stopPropagation()
-            handleStatusChange(item)
+            e.stopPropagation();
+            handleStatusChange(item);
           }}
         >
           <Text style={styles.statusButtonText}>{statusLabels[item.status]}</Text>
         </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.deleteButton, { backgroundColor: colors.danger }]}
+          onPress={() => handleDelete(item.id)}
+        >
+          <Feather name="trash-2" size={16} color="#fff" />
+        </TouchableOpacity>
       </View>
-    </TouchableOpacity>
+    </View>
   )
 
   return (
@@ -353,36 +359,55 @@ export default function ActivitiesScreen() {
             <TextInput
               style={[styles.input, { color: colors.text, borderColor: colors.border }]}
               placeholder="Nombre de la tarea"
-              placeholderTextColor={colors.textSecondary}
+              placeholderTextColor={theme === 'dark' ? '#e9ecef' : '#6c757d'}
               value={name}
               onChangeText={setName}
             />
             <TextInput
-              style={[styles.input, { color: colors.text, borderColor: colors.border }]}
+              style={[styles.input, { 
+                color: colors.text, 
+                borderColor: colors.border,
+                minHeight: 100,
+                textAlignVertical: 'top'
+              }]}
               placeholder="Descripción"
-              placeholderTextColor={colors.textSecondary}
+              placeholderTextColor={theme === 'dark' ? '#e9ecef' : '#6c757d'}
               value={description}
               onChangeText={setDescription}
               multiline
             />
-            <Text style={[styles.sectionLabel, { color: colors.text }]}>Anexo de Creador</Text>
-            <TouchableOpacity
-              style={[styles.attachmentButton, { backgroundColor: colors.background }]}
-              onPress={() => handlePickFile("creator")}
-            >
-              <Text style={[styles.attachmentButtonText, { color: colors.text }]}>
-                {creatorAttachment ? creatorAttachment.name : "Subir archivo"}
-              </Text>
-            </TouchableOpacity>
-            <Text style={[styles.sectionLabel, { color: colors.text }]}>Anexo de Colaborador</Text>
-            <TouchableOpacity
-              style={[styles.attachmentButton, { backgroundColor: colors.background }]}
-              onPress={() => handlePickFile("collaborator")}
-            >
-              <Text style={[styles.attachmentButtonText, { color: colors.text }]}>
-                {collaboratorAttachment ? collaboratorAttachment.name : "Subir archivo"}
-              </Text>
-            </TouchableOpacity>
+            <Text style={[styles.sectionLabel, { color: colors.text }]}>Nivel de Urgencia</Text>
+            <View style={styles.urgencyContainer}>
+              {(['baja', 'media', 'alta'] as UrgencyLevel[]).map((level) => (
+                <TouchableOpacity
+                  key={level}
+                  style={[
+                    styles.urgencyButton,
+                    {
+                      backgroundColor: urgency === level ? 
+                        level === 'baja' ? '#4CAF50' :
+                        level === 'media' ? '#FFC107' : '#F44336' :
+                        colors.card,
+                      borderColor: colors.border,
+                    },
+                  ]}
+                  onPress={() => setUrgency(level)}
+                >
+                  <Text
+                    style={[
+                      styles.urgencyButtonText,
+                      { 
+                        color: urgency === level ? '#fff' : colors.text,
+                        fontWeight: urgency === level ? 'bold' : 'normal'
+                      },
+                    ]}
+                  >
+                    {level.charAt(0).toUpperCase() + level.slice(1)}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
             <View style={styles.buttonRow}>
               <TouchableOpacity
                 style={[styles.cancelButton, { backgroundColor: colors.secondary }]}
@@ -448,25 +473,92 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
   },
   card: {
-    margin: 12,
-    padding: 18,
-    borderRadius: 10,
-    elevation: 2,
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+    position: 'relative',
+    overflow: 'hidden',
+  },
+  cardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  urgencyBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    marginLeft: 8,
+  },
+  urgencyText: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  sectionLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    marginTop: 16,
+    marginBottom: 8,
+    color: '#666',
+  },
+  urgencyContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+  },
+  urgencyButton: {
+    flex: 1,
+    marginHorizontal: 4,
+    paddingVertical: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  urgencyButtonText: {
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  cardTextContainer: {
+    marginBottom: 12,
   },
   cardTitle: {
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: "bold",
+    marginBottom: 4,
+  },
+  cardDescription: {
+    fontSize: 14,
+    opacity: 0.8,
+  },
+  cardActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 12,
   },
   statusButton: {
-    paddingHorizontal: 10,
     paddingVertical: 6,
-    borderRadius: 8,
-    alignItems: "center",
-    justifyContent: "center",
+    paddingHorizontal: 12,
+    borderRadius: 15,
+    minWidth: 100,
   },
   statusButtonText: {
-    color: "white",
-    fontWeight: "bold",
+    color: '#fff',
+    fontWeight: '500',
+    textAlign: 'center',
+  },
+  deleteButton: {
+    padding: 8,
+    borderRadius: 15,
+    marginLeft: 8,
   },
   modalOverlay: {
     flex: 1,
@@ -492,20 +584,6 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     fontSize: 16,
   },
-  sectionLabel: {
-    marginTop: 8,
-    marginBottom: 4,
-    fontWeight: "bold",
-  },
-  attachmentButton: {
-    borderRadius: 8,
-    padding: 10,
-    marginBottom: 8,
-    alignItems: "center",
-  },
-  attachmentButtonText: {
-    color: "#495057",
-  },
   buttonRow: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -521,12 +599,6 @@ const styles = StyleSheet.create({
     padding: 12,
     borderRadius: 8,
     width: "48%",
-    alignItems: "center",
-  },
-  deleteButton: {
-    padding: 12,
-    borderRadius: 8,
-    marginTop: 12,
     alignItems: "center",
   },
   buttonText: {
