@@ -1,95 +1,285 @@
 "use client"
 
-import { useState, useCallback, useEffect } from "react"
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Modal, TextInput } from "react-native"
+import { useState, useCallback, useEffect, useRef } from "react"
+import {
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  FlatList,
+  Modal,
+  StyleSheet,
+  Alert,
+  Platform,
+  AppState,
+} from "react-native"
 import { Calendar, type DateData } from "react-native-calendars"
+import * as DocumentPicker from "expo-document-picker"
+import * as Notifications from 'expo-notifications';
 import { useTheme } from "../context/ThemeContext"
-import { useData, type Actividad } from "../context/DataContext"
 import { Feather } from "@expo/vector-icons"
 import { format } from "date-fns"
 import { es } from "date-fns/locale"
 
-const ActivitiesScreen = () => {
-  const { colors, theme } = useTheme()
-  const { actividades, addActividad, updateActividad, deleteActividad } = useData()
-  const [selectedDate, setSelectedDate] = useState(format(new Date(), "yyyy-MM-dd"))
-  const [modalVisible, setModalVisible] = useState(false)
-  const [currentActivity, setCurrentActivity] = useState<Partial<Actividad> | null>(null)
-  const [markedDates, setMarkedDates] = useState({})
+// Configurar el manejador de notificaciones
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowAlert: true,
+    shouldPlaySound: true,
+    shouldSetBadge: true,
+  }),
+});
 
-  // Actualizar las fechas marcadas cuando cambien las actividades
+type TaskStatus = "pending" | "in_progress" | "completed"
+
+interface Task {
+  id: string
+  name: string
+  description: string
+  date: string
+  creatorAttachment?: { name: string; uri: string }
+  collaboratorAttachment?: { name: string; uri: string }
+  status: TaskStatus
+}
+
+const statusColors = {
+  pending: "#e74c3c",
+  in_progress: "#f1c40f",
+  completed: "#2ecc71",
+}
+
+const statusLabels = {
+  pending: "Pendiente",
+  in_progress: "En Progreso",
+  completed: "Completado",
+}
+
+export default function ActivitiesScreen() {
+  const { colors, theme } = useTheme()
+  const [tasks, setTasks] = useState<Task[]>([])
+  const [modalVisible, setModalVisible] = useState(false)
+  const [editingTask, setEditingTask] = useState<Task | null>(null)
+  const [selectedDate, setSelectedDate] = useState(format(new Date(), "yyyy-MM-dd"))
+  const [markedDates, setMarkedDates] = useState({})
+  const notificationListener = useRef<Notifications.Subscription>();
+  const responseListener = useRef<Notifications.Subscription>();
+
+  // Form state
+  const [name, setName] = useState("")
+  const [description, setDescription] = useState("")
+  const [creatorAttachment, setCreatorAttachment] = useState<{ name: string; uri: string } | null>(null)
+  const [collaboratorAttachment, setCollaboratorAttachment] = useState<{ name: string; uri: string } | null>(null)
+
+  // Configurar notificaciones al montar el componente
   useEffect(() => {
-    const marked = {}
-    actividades.forEach((actividad) => {
-      marked[actividad.fecha] = {
+    registerForPushNotificationsAsync();
+
+    // Configurar el listener para cuando se recibe una notificación
+    notificationListener.current = Notifications.addNotificationReceivedListener(notification => {
+      console.log('Notificación recibida:', notification);
+    });
+
+    // Configurar el listener para cuando el usuario interactúa con la notificación
+    responseListener.current = Notifications.addNotificationResponseReceivedListener(response => {
+      console.log('Respuesta a notificación:', response);
+    });
+
+    // Limpiar listeners al desmontar
+    return () => {
+      if (notificationListener.current) {
+        Notifications.removeNotificationSubscription(notificationListener.current);
+      }
+      if (responseListener.current) {
+        Notifications.removeNotificationSubscription(responseListener.current);
+      }
+    };
+  }, []);
+
+  // Función para registrar el dispositivo para notificaciones push
+  async function registerForPushNotificationsAsync() {
+    const { status: existingStatus } = await Notifications.getPermissionsAsync();
+    let finalStatus = existingStatus;
+    
+    if (existingStatus !== 'granted') {
+      const { status } = await Notifications.requestPermissionsAsync();
+      finalStatus = status;
+    }
+    
+    if (finalStatus !== 'granted') {
+      console.log('Permiso denegado para notificaciones');
+      return;
+    }
+
+    // Configurar el canal de notificación para Android
+    if (Platform.OS === 'android') {
+      await Notifications.setNotificationChannelAsync('default', {
+        name: 'default',
+        importance: Notifications.AndroidImportance.MAX,
+        vibrationPattern: [0, 250, 250, 250],
+        lightColor: '#FF231F7C',
+        sound: 'default',
+      });
+    }
+  }
+
+  // Función para programar una notificación local
+  async function schedulePushNotification(task: Task) {
+    await Notifications.scheduleNotificationAsync({
+      content: {
+        title: "Nueva tarea creada",
+        body: `Tarea: ${task.name}`,
+        data: { taskId: task.id },
+        sound: 'default',
+      },
+      trigger: { seconds: 1 }, // Mostrar notificación después de 1 segundo
+    });
+  }
+
+  // Update marked dates when tasks change
+  useEffect(() => {
+    const marked: any = {}
+    tasks.forEach((task) => {
+      marked[task.date] = {
         marked: true,
-        dotColor: actividad.color || "#6c757d",
+        dotColor: statusColors[task.status],
       }
     })
+    // Add current date marker
+    const today = format(new Date(), "yyyy-MM-dd")
+    if (!marked[today]) {
+      marked[today] = { selected: true, selectedColor: colors.primary }
+    } else {
+      marked[today].selected = true
+      marked[today].selectedColor = colors.primary
+    }
     setMarkedDates(marked)
-  }, [actividades])
+  }, [tasks, colors.primary])
 
   const handleDayPress = useCallback((day: DateData) => {
     setSelectedDate(day.dateString)
   }, [])
 
-  const filteredActivities = actividades.filter((actividad) => actividad.fecha === selectedDate)
+  const filteredTasks = tasks.filter((task) => task.date === selectedDate)
 
-  const timeSlots = Array.from({ length: 24 }, (_, i) => {
-    const hour = i < 10 ? `0${i}` : `${i}`
-    return `${hour}:00`
-  })
+  // Helpers
+  const resetForm = () => {
+    setName("")
+    setDescription("")
+    setCreatorAttachment(null)
+    setCollaboratorAttachment(null)
+    setEditingTask(null)
+  }
 
-  const openAddModal = () => {
-    setCurrentActivity({
-      titulo: "",
-      descripcion: "",
-      fecha: selectedDate,
-      horaInicio: "08:00",
-      horaFin: "09:00",
-      color: "#6c757d",
-    })
+  const openForm = (task?: Task) => {
+    if (task) {
+      setEditingTask(task)
+      setName(task.name)
+      setDescription(task.description)
+      setCreatorAttachment(task.creatorAttachment || null)
+      setCollaboratorAttachment(task.collaboratorAttachment || null)
+    } else {
+      setEditingTask(null)
+      resetForm()
+    }
     setModalVisible(true)
   }
 
-  const openEditModal = (actividad: Actividad) => {
-    setCurrentActivity(actividad)
-    setModalVisible(true)
+  const closeForm = () => {
+    resetForm()
+    setModalVisible(false)
   }
 
-  const handleSaveActivity = () => {
-    if (
-      !currentActivity ||
-      !currentActivity.titulo ||
-      !currentActivity.fecha ||
-      !currentActivity.horaInicio ||
-      !currentActivity.horaFin
-    ) {
+  const handleSave = async () => {
+    if (!name.trim()) {
+      Alert.alert("Error", "El nombre de la tarea es obligatorio")
       return
     }
-
-    if (currentActivity.id) {
-      updateActividad(currentActivity.id, currentActivity)
+    
+    if (editingTask) {
+      setTasks(
+        tasks.map((t) =>
+          t.id === editingTask.id
+            ? {
+                ...t,
+                name,
+                description,
+                creatorAttachment: creatorAttachment || undefined,
+                collaboratorAttachment: collaboratorAttachment || undefined,
+              }
+            : t
+        )
+      )
     } else {
-      addActividad(currentActivity as Omit<Actividad, "id">)
+      const newTask = {
+        id: Date.now().toString(),
+        name,
+        description,
+        date: selectedDate,
+        creatorAttachment: creatorAttachment || undefined,
+        collaboratorAttachment: collaboratorAttachment || undefined,
+        status: "pending" as const,
+      };
+      
+      setTasks([...tasks, newTask]);
+      
+      // Programar notificación para la nueva tarea
+      await schedulePushNotification(newTask);
     }
-
-    setModalVisible(false)
-    setCurrentActivity(null)
+    closeForm()
   }
 
-  const handleDeleteActivity = () => {
-    if (currentActivity && currentActivity.id) {
-      deleteActividad(currentActivity.id)
-      setModalVisible(false)
-      setCurrentActivity(null)
+  const handleDelete = (id: string) => {
+    Alert.alert("Eliminar", "¿Eliminar esta tarea?", [
+      { text: "Cancelar", style: "cancel" },
+      {
+        text: "Eliminar",
+        style: "destructive",
+        onPress: () => setTasks(tasks.filter((t) => t.id !== id)),
+      },
+    ])
+  }
+
+  const handlePickFile = async (type: "creator" | "collaborator") => {
+    const result = await DocumentPicker.getDocumentAsync({ copyToCacheDirectory: true })
+    if (result.type === "success") {
+      const file = { name: result.name, uri: result.uri }
+      if (type === "creator") setCreatorAttachment(file)
+      else setCollaboratorAttachment(file)
     }
   }
 
-  const formatDate = (dateString: string) => {
-    const date = new Date(dateString)
-    return format(date, "EEEE d 'de' MMMM 'de' yyyy", { locale: es })
+  const handleStatusChange = (task: Task) => {
+    const nextStatus: TaskStatus =
+      task.status === "pending"
+        ? "in_progress"
+        : task.status === "in_progress"
+        ? "completed"
+        : "pending"
+    setTasks(tasks.map((t) => (t.id === task.id ? { ...t, status: nextStatus } : t)))
   }
+
+  const renderTask = ({ item }: { item: Task }) => (
+    <TouchableOpacity
+      style={[styles.card, { backgroundColor: colors.card }]}
+      onPress={() => openForm(item)}
+    >
+      <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+        <View>
+          <Text style={[styles.cardTitle, { color: colors.text }]}>{item.name}</Text>
+          <Text style={{ color: colors.text }}>{item.description}</Text>
+        </View>
+        <TouchableOpacity
+          style={[styles.statusButton, { backgroundColor: statusColors[item.status] }]}
+          onPress={(e) => {
+            e.stopPropagation()
+            handleStatusChange(item)
+          }}
+        >
+          <Text style={styles.statusButtonText}>{statusLabels[item.status]}</Text>
+        </TouchableOpacity>
+      </View>
+    </TouchableOpacity>
+  )
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
@@ -98,10 +288,9 @@ const ActivitiesScreen = () => {
         markedDates={{
           ...markedDates,
           [selectedDate]: {
+            ...markedDates[selectedDate as keyof typeof markedDates],
             selected: true,
             selectedColor: colors.primary,
-            marked: markedDates[selectedDate]?.marked || false,
-            dotColor: markedDates[selectedDate]?.dotColor || colors.primary,
           },
         }}
         theme={{
@@ -116,158 +305,109 @@ const ActivitiesScreen = () => {
           monthTextColor: colors.text,
           arrowColor: colors.primary,
           indicatorColor: colors.primary,
-          // Dark mode specific settings
           backgroundColor: colors.background,
-          textSectionTitleDisabledColor: colors.secondary + "80",
-          textDisabledColor: colors.secondary + "80",
-          textDayFontFamily: 'System',
-          textMonthFontFamily: 'System',
-          textDayHeaderFontFamily: 'System',
-          textDayFontWeight: '300',
-          textMonthFontWeight: 'bold',
-          textDayHeaderFontWeight: '300',
+          textSectionTitleDisabledColor: `${colors.secondary}80`,
+          textDisabledColor: `${colors.secondary}80`,
+          textDayFontFamily: "System",
+          textMonthFontFamily: "System",
+          textDayHeaderFontFamily: "System",
+          textDayFontWeight: "300",
+          textMonthFontWeight: "bold",
+          textDayHeaderFontWeight: "300",
           textDayFontSize: 16,
           textMonthFontSize: 16,
-          textDayHeaderFontSize: 16
+          textDayHeaderFontSize: 16,
         }}
       />
 
       <View style={styles.dayHeader}>
-        <Text style={[styles.dayTitle, { color: colors.text }]}>{formatDate(selectedDate)}</Text>
-        <TouchableOpacity style={[styles.addButton, { backgroundColor: colors.primary }]} onPress={openAddModal}>
-          <Feather name="plus" size={20} color="#ffffff" />
-        </TouchableOpacity>
+        <Text style={[styles.dayTitle, { color: colors.text }]}>
+          {format(new Date(selectedDate), "EEEE d 'de' MMMM 'de' yyyy", { locale: es })}
+        </Text>
       </View>
 
-      <ScrollView style={styles.timelineContainer}>
-        {timeSlots.map((time) => {
-          const activitiesAtTime = filteredActivities.filter((act) => act.horaInicio <= time && act.horaFin > time)
+      <FlatList
+        data={filteredTasks}
+        keyExtractor={(item) => item.id}
+        renderItem={renderTask}
+        ListEmptyComponent={
+          <Text style={{ color: colors.text, textAlign: "center", marginTop: 40 }}>Sin tareas para este día</Text>
+        }
+      />
 
-          return (
-            <View key={time} style={styles.timeSlot}>
-              <Text style={[styles.timeText, { color: colors.text }]}>{time}</Text>
-              <View style={styles.activitiesContainer}>
-                {activitiesAtTime.map((activity) => (
-                  <TouchableOpacity
-                    key={activity.id}
-                    style={[
-                      styles.activityCard,
-                      {
-                        backgroundColor: activity.color || colors.primary,
-                        borderColor: colors.border,
-                      },
-                    ]}
-                    onPress={() => openEditModal(activity)}
-                  >
-                    <Text style={styles.activityTitle}>{activity.titulo}</Text>
-                    <Text style={styles.activityTime}>
-                      {activity.horaInicio} - {activity.horaFin}
-                    </Text>
-                    {activity.descripcion ? (
-                      <Text style={styles.activityDescription} numberOfLines={2}>
-                        {activity.descripcion}
-                      </Text>
-                    ) : null}
-                  </TouchableOpacity>
-                ))}
-              </View>
-            </View>
-          )
-        })}
-      </ScrollView>
+      {/* Floating + button */}
+      <TouchableOpacity
+        style={[styles.fab, { backgroundColor: colors.primary }]}
+        onPress={() => openForm()}
+      >
+        <Text style={styles.fabText}>+</Text>
+      </TouchableOpacity>
 
-      <Modal visible={modalVisible} transparent animationType="slide">
-        <View style={styles.modalContainer}>
+      {/* Modal Form */}
+      <Modal visible={modalVisible} animationType="slide" transparent>
+        <View style={styles.modalOverlay}>
           <View style={[styles.modalContent, { backgroundColor: colors.card }]}>
             <Text style={[styles.modalTitle, { color: colors.text }]}>
-              {currentActivity?.id ? "Editar Actividad" : "Nueva Actividad"}
+              {editingTask ? "Editar Tarea" : "Nueva Tarea"}
             </Text>
-
             <TextInput
-              style={[styles.input, { backgroundColor: colors.background, color: colors.text }]}
-              placeholder="Título"
-              placeholderTextColor={colors.secondary}
-              value={currentActivity?.titulo || ""}
-              onChangeText={(text) => setCurrentActivity({ ...currentActivity, titulo: text })}
+              style={[styles.input, { color: colors.text, borderColor: colors.border }]}
+              placeholder="Nombre de la tarea"
+              placeholderTextColor={colors.textSecondary}
+              value={name}
+              onChangeText={setName}
             />
-
             <TextInput
-              style={[styles.input, { backgroundColor: colors.background, color: colors.text }]}
+              style={[styles.input, { color: colors.text, borderColor: colors.border }]}
               placeholder="Descripción"
-              placeholderTextColor={colors.secondary}
+              placeholderTextColor={colors.textSecondary}
+              value={description}
+              onChangeText={setDescription}
               multiline
-              numberOfLines={3}
-              value={currentActivity?.descripcion || ""}
-              onChangeText={(text) => setCurrentActivity({ ...currentActivity, descripcion: text })}
             />
-
-            <View style={styles.timeInputContainer}>
-              <View style={styles.timeInput}>
-                <Text style={[styles.timeLabel, { color: colors.text }]}>Hora inicio:</Text>
-                <TextInput
-                  style={[styles.timeInputField, { backgroundColor: colors.background, color: colors.text }]}
-                  placeholder="HH:MM"
-                  placeholderTextColor={colors.secondary}
-                  value={currentActivity?.horaInicio || ""}
-                  onChangeText={(text) => setCurrentActivity({ ...currentActivity, horaInicio: text })}
-                />
-              </View>
-
-              <View style={styles.timeInput}>
-                <Text style={[styles.timeLabel, { color: colors.text }]}>Hora fin:</Text>
-                <TextInput
-                  style={[styles.timeInputField, { backgroundColor: colors.background, color: colors.text }]}
-                  placeholder="HH:MM"
-                  placeholderTextColor={colors.secondary}
-                  value={currentActivity?.horaFin || ""}
-                  onChangeText={(text) => setCurrentActivity({ ...currentActivity, horaFin: text })}
-                />
-              </View>
-            </View>
-
-            <View style={styles.colorSelector}>
-              <Text style={[styles.colorLabel, { color: colors.text }]}>Color:</Text>
-              <View style={styles.colorOptions}>
-                {["#6c757d", "#dc3545", "#fd7e14", "#ffc107", "#28a745", "#17a2b8", "#007bff", "#6f42c1"].map(
-                  (color) => (
-                    <TouchableOpacity
-                      key={color}
-                      style={[
-                        styles.colorOption,
-                        { backgroundColor: color },
-                        currentActivity?.color === color && styles.selectedColor,
-                      ]}
-                      onPress={() => setCurrentActivity({ ...currentActivity, color })}
-                    />
-                  ),
-                )}
-              </View>
-            </View>
-
-            <View style={styles.modalButtons}>
+            <Text style={[styles.sectionLabel, { color: colors.text }]}>Anexo de Creador</Text>
+            <TouchableOpacity
+              style={[styles.attachmentButton, { backgroundColor: colors.background }]}
+              onPress={() => handlePickFile("creator")}
+            >
+              <Text style={[styles.attachmentButtonText, { color: colors.text }]}>
+                {creatorAttachment ? creatorAttachment.name : "Subir archivo"}
+              </Text>
+            </TouchableOpacity>
+            <Text style={[styles.sectionLabel, { color: colors.text }]}>Anexo de Colaborador</Text>
+            <TouchableOpacity
+              style={[styles.attachmentButton, { backgroundColor: colors.background }]}
+              onPress={() => handlePickFile("collaborator")}
+            >
+              <Text style={[styles.attachmentButtonText, { color: colors.text }]}>
+                {collaboratorAttachment ? collaboratorAttachment.name : "Subir archivo"}
+              </Text>
+            </TouchableOpacity>
+            <View style={styles.buttonRow}>
               <TouchableOpacity
-                style={[styles.modalButton, { backgroundColor: colors.secondary }]}
-                onPress={() => setModalVisible(false)}
+                style={[styles.cancelButton, { backgroundColor: colors.secondary }]}
+                onPress={closeForm}
               >
-                <Text style={styles.modalButtonText}>Cancelar</Text>
+                <Text style={styles.buttonText}>Cancelar</Text>
               </TouchableOpacity>
-
-              {currentActivity?.id && (
-                <TouchableOpacity
-                  style={[styles.modalButton, { backgroundColor: "#dc3545" }]}
-                  onPress={handleDeleteActivity}
-                >
-                  <Text style={styles.modalButtonText}>Eliminar</Text>
-                </TouchableOpacity>
-              )}
-
               <TouchableOpacity
-                style={[styles.modalButton, { backgroundColor: colors.primary }]}
-                onPress={handleSaveActivity}
+                style={[styles.saveButton, { backgroundColor: colors.primary }]}
+                onPress={handleSave}
               >
-                <Text style={styles.modalButtonText}>Guardar</Text>
+                <Text style={styles.buttonText}>Guardar</Text>
               </TouchableOpacity>
             </View>
+            {editingTask && (
+              <TouchableOpacity
+                style={[styles.deleteButton, { backgroundColor: "#e74c3c" }]}
+                onPress={() => {
+                  closeForm()
+                  handleDelete(editingTask.id)
+                }}
+              >
+                <Text style={styles.buttonText}>Eliminar Tarea</Text>
+              </TouchableOpacity>
+            )}
           </View>
         </View>
       </Modal>
@@ -280,144 +420,117 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   dayHeader: {
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: "#e0e0e0",
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    padding: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: "#dee2e6",
   },
   dayTitle: {
     fontSize: 18,
     fontWeight: "bold",
   },
-  addButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  timelineContainer: {
-    flex: 1,
-  },
-  timeSlot: {
-    flexDirection: "row",
-    borderBottomWidth: 1,
-    borderBottomColor: "#dee2e6",
-    minHeight: 60,
-  },
-  timeText: {
+  fab: {
+    position: "absolute",
+    bottom: 30,
+    right: 30,
     width: 60,
-    padding: 10,
-    textAlign: "center",
-    fontWeight: "500",
+    height: 60,
+    borderRadius: 30,
+    alignItems: "center",
+    justifyContent: "center",
+    elevation: 4,
   },
-  activitiesContainer: {
-    flex: 1,
-    padding: 5,
-  },
-  activityCard: {
-    padding: 10,
-    borderRadius: 5,
-    marginBottom: 5,
-    borderWidth: 1,
-  },
-  activityTitle: {
+  fabText: {
+    color: "white",
+    fontSize: 32,
     fontWeight: "bold",
-    color: "#ffffff",
   },
-  activityTime: {
-    fontSize: 12,
-    color: "#ffffff",
-    marginTop: 2,
+  card: {
+    margin: 12,
+    padding: 18,
+    borderRadius: 10,
+    elevation: 2,
   },
-  activityDescription: {
-    fontSize: 12,
-    color: "#ffffff",
-    marginTop: 2,
+  cardTitle: {
+    fontSize: 18,
+    fontWeight: "bold",
   },
-  modalContainer: {
+  statusButton: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  statusButtonText: {
+    color: "white",
+    fontWeight: "bold",
+  },
+  modalOverlay: {
     flex: 1,
+    backgroundColor: "rgba(0,0,0,0.3)",
     justifyContent: "center",
     alignItems: "center",
-    backgroundColor: "rgba(0, 0, 0, 0.5)",
   },
   modalContent: {
     width: "90%",
-    borderRadius: 10,
+    borderRadius: 12,
     padding: 20,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 3.84,
-    elevation: 5,
   },
   modalTitle: {
-    fontSize: 18,
+    fontSize: 20,
     fontWeight: "bold",
-    marginBottom: 15,
+    marginBottom: 12,
     textAlign: "center",
   },
   input: {
     borderWidth: 1,
-    borderColor: "#dee2e6",
-    borderRadius: 5,
+    borderRadius: 8,
     padding: 10,
-    marginBottom: 10,
+    marginBottom: 12,
+    fontSize: 16,
   },
-  timeInputContainer: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    marginBottom: 10,
+  sectionLabel: {
+    marginTop: 8,
+    marginBottom: 4,
+    fontWeight: "bold",
   },
-  timeInput: {
-    width: "48%",
-  },
-  timeLabel: {
-    marginBottom: 5,
-  },
-  timeInputField: {
-    borderWidth: 1,
-    borderColor: "#dee2e6",
-    borderRadius: 5,
+  attachmentButton: {
+    borderRadius: 8,
     padding: 10,
-  },
-  colorSelector: {
-    marginBottom: 15,
-  },
-  colorLabel: {
-    marginBottom: 5,
-  },
-  colorOptions: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-  },
-  colorOption: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    margin: 5,
-  },
-  selectedColor: {
-    borderWidth: 2,
-    borderColor: "#ffffff",
-  },
-  modalButtons: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-  },
-  modalButton: {
-    padding: 10,
-    borderRadius: 5,
-    flex: 1,
-    marginHorizontal: 5,
+    marginBottom: 8,
     alignItems: "center",
   },
-  modalButtonText: {
-    color: "#ffffff",
+  attachmentButtonText: {
+    color: "#495057",
+  },
+  buttonRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginTop: 10,
+  },
+  cancelButton: {
+    padding: 12,
+    borderRadius: 8,
+    width: "48%",
+    alignItems: "center",
+  },
+  saveButton: {
+    padding: 12,
+    borderRadius: 8,
+    width: "48%",
+    alignItems: "center",
+  },
+  deleteButton: {
+    padding: 12,
+    borderRadius: 8,
+    marginTop: 12,
+    alignItems: "center",
+  },
+  buttonText: {
+    color: "white",
     fontWeight: "bold",
   },
 })
-
-export default ActivitiesScreen

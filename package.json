@@ -11,12 +11,16 @@
   "dependencies": {
     "@expo/vector-icons": "^14.1.0",
     "@react-native-async-storage/async-storage": "^2.1.2",
+    "@react-native-community/push-notification-ios": "^1.11.0",
     "@react-navigation/drawer": "^7.3.11",
     "@react-navigation/native": "^7.1.8",
     "@react-navigation/native-stack": "^7.3.12",
     "@supabase/supabase-js": "1.35.7",
     "date-fns": "^4.1.0",
     "expo": "53.0.9",
+    "expo-document-picker": "~13.1.5",
+    "expo-modules-core": "~2.3.13",
+    "expo-notifications": "~0.31.2",
     "expo-print": "^14.1.4",
     "expo-sharing": "^13.1.5",
     "expo-status-bar": "~2.2.3",
@@ -27,8 +31,7 @@
     "react-native-reanimated": "^3.17.5",
     "react-native-safe-area-context": "^5.4.0",
     "react-native-screens": "^4.10.0",
-    "react-native-url-polyfill": "^2.0.0",
-    "expo-modules-core": "~2.3.13"
+    "react-native-url-polyfill": "^2.0.0"
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",
