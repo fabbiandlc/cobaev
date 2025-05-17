@@ -12,6 +12,7 @@ import ActivitiesScreen from "./screens/ActivitiesScreen"
 import ManagementScreen from "./screens/ManagementScreen"
 import ScheduleScreen from "./screens/ScheduleScreen"
 import StatisticsScreen from "./screens/StatisticsScreen"
+import BackupScreen from "./screens/BackupScreen"
 import CustomDrawerContent from "./components/CustomDrawerContent"
 import { ThemeProvider } from "./context/ThemeContext"
 import { DataProvider } from "./context/DataContext"
@@ -82,6 +83,7 @@ export default function App() {
         <Drawer.Screen name="Gestión" component={ManagementScreen} />
         <Drawer.Screen name="Horarios" component={ScheduleScreen} />
         <Drawer.Screen name="Estadísticas" component={StatisticsScreen} />
+        <Drawer.Screen name="Copia de Seguridad" component={BackupScreen} />
       </Drawer.Navigator>
     )
   }
@@ -103,4 +105,3 @@ export default function App() {
     </ThemeProvider>
   )
 }
- 

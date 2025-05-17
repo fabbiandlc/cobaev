@@ -19,6 +19,7 @@ import { useTheme } from "../context/ThemeContext"
 import { Feather } from "@expo/vector-icons"
 import { format } from "date-fns"
 import { es } from "date-fns/locale"
+import AsyncStorage from "@react-native-async-storage/async-storage"
 
 // Configurar el manejador de notificaciones
 Notifications.setNotificationHandler({
@@ -89,6 +90,8 @@ export default function ActivitiesScreen() {
   const [markedDates, setMarkedDates] = useState({})
   const notificationListener = useRef<Notifications.Subscription>();
   const responseListener = useRef<Notifications.Subscription>();
+  const appState = useRef(AppState.currentState);
+  const restoreCheckInterval = useRef<NodeJS.Timeout>();
 
   // Form state
   const [name, setName] = useState("")
@@ -109,6 +112,41 @@ export default function ActivitiesScreen() {
       console.log('Respuesta a notificación:', response);
     });
 
+    // Cargar tareas guardadas
+    loadTasks();
+
+    // Monitorear cambios en el estado de la aplicación
+    const subscription = AppState.addEventListener('change', nextAppState => {
+      if (
+        appState.current.match(/inactive|background/) && 
+        nextAppState === 'active'
+      ) {
+        // La app volvió a primer plano, recargamos las tareas
+        loadTasks();
+      }
+      
+      appState.current = nextAppState;
+    });
+
+    // Listener for backup restoration
+    const checkForRestoration = async () => {
+      try {
+        const lastRestoreTime = await AsyncStorage.getItem('lastRestoreTime');
+        const lastCheckedTime = await AsyncStorage.getItem('lastCheckedRestoreTime');
+        
+        if (lastRestoreTime && lastRestoreTime !== lastCheckedTime) {
+          // Reload tasks if a restoration was detected
+          loadTasks();
+          await AsyncStorage.setItem('lastCheckedRestoreTime', lastRestoreTime);
+        }
+      } catch (error) {
+        console.error('Error checking for restoration:', error);
+      }
+    };
+
+    // Check for restorations every 5 seconds
+    restoreCheckInterval.current = setInterval(checkForRestoration, 5000);
+
     // Limpiar listeners al desmontar
     return () => {
       if (notificationListener.current) {
@@ -117,8 +155,85 @@ export default function ActivitiesScreen() {
       if (responseListener.current) {
         Notifications.removeNotificationSubscription(responseListener.current);
       }
+      subscription.remove();
+      clearInterval(restoreCheckInterval.current);
     };
   }, []);
+
+  // Función para cargar tareas desde AsyncStorage
+  const loadTasks = async () => {
+    try {
+      const tasksJson = await AsyncStorage.getItem('tasks');
+      if (tasksJson) {
+        const savedTasks = JSON.parse(tasksJson);
+        setTasks(savedTasks);
+        updateMarkedDates(savedTasks);
+      }
+    } catch (error) {
+      console.error('Error al cargar tareas:', error);
+      Alert.alert('Error', 'No se pudieron cargar las tareas guardadas');
+    }
+  };
+
+  // Función para guardar tareas en AsyncStorage
+  const saveTasks = async (updatedTasks: Task[]) => {
+    try {
+      await AsyncStorage.setItem('tasks', JSON.stringify(updatedTasks));
+    } catch (error) {
+      console.error('Error al guardar tareas:', error);
+      Alert.alert('Error', 'No se pudieron guardar los cambios');
+    }
+  };
+
+  // Actualizar las fechas marcadas en el calendario
+  const updateMarkedDates = (taskList: Task[]) => {
+    const newMarkedDates = {};
+    
+    // Marcar el día actual
+    const today = format(new Date(), "yyyy-MM-dd");
+    newMarkedDates[today] = {
+      selected: today === selectedDate,
+      marked: false,
+      customStyles: {
+        container: {
+          backgroundColor: today === selectedDate ? colors.primary : '#2196f3',
+        },
+        text: {
+          color: 'white',
+        }
+      }
+    };
+    
+    // Marcar días con tareas
+    taskList.forEach(task => {
+      if (task.date === today) return; // Ya está marcado como día actual
+      
+      newMarkedDates[task.date] = {
+        ...newMarkedDates[task.date],
+        selected: task.date === selectedDate,
+        marked: true,
+        customStyles: {
+          container: {
+            backgroundColor: task.date === selectedDate ? colors.primary : undefined,
+          },
+          text: {
+            color: task.date === selectedDate ? 'white' : undefined,
+          },
+          dot: {
+            color: getTaskDotColor(task),
+          }
+        }
+      };
+    });
+    
+    setMarkedDates(newMarkedDates);
+  };
+
+  // Obtener el color del punto para la tarea en el calendario
+  const getTaskDotColor = (task: Task) => {
+    if (task.status === 'completed') return statusColors.completed;
+    return urgencyColors[task.urgency];
+  };
 
   // Función para registrar el dispositivo para notificaciones push
   async function registerForPushNotificationsAsync() {
@@ -162,58 +277,7 @@ export default function ActivitiesScreen() {
 
   // Update marked dates when tasks change
   useEffect(() => {
-    const marked: any = {}
-    
-    // Agregar marcador para el día actual con fondo azul
-    const today = format(new Date(), "yyyy-MM-dd")
-    marked[today] = {
-      customStyles: {
-        container: {
-          backgroundColor: '#2196f3',
-          borderRadius: 16,
-        },
-        text: {
-          color: 'white',
-          fontWeight: 'bold',
-        },
-      },
-    }
-    
-    // Agregar marcadores para las tareas
-    tasks.forEach((task) => {
-      if (task.date === today) {
-        // Si hay una tarea en el día actual, mantener el estilo del día actual
-        marked[task.date] = {
-          ...marked[task.date],
-          marked: true,
-          dotColor: statusColors[task.status],
-        }
-      } else {
-        // Para otros días con tareas
-        marked[task.date] = {
-          marked: true,
-          dotColor: statusColors[task.status],
-        }
-      }
-    })
-    
-    // Agregar marcador para el día seleccionado
-    if (selectedDate !== today) {
-      marked[selectedDate] = {
-        ...(marked[selectedDate] || {}),
-        selected: true,
-        selectedColor: colors.primary,
-      }
-    } else {
-      // Si el día seleccionado es hoy, mantener el fondo azul pero agregar un borde
-      marked[selectedDate] = {
-        ...marked[selectedDate],
-        selected: true,
-        selectedColor: '#1976d2', // Azul más oscuro para la selección
-      }
-    }
-    
-    setMarkedDates(marked)
+    updateMarkedDates(tasks);
   }, [tasks, selectedDate, colors.primary])
 
   const handleDayPress = useCallback((day: DateData) => {
@@ -232,76 +296,86 @@ export default function ActivitiesScreen() {
 
   const openForm = (task: Task | null = null) => {
     if (task) {
-      setEditingTask(task)
       setName(task.name)
       setDescription(task.description)
       setUrgency(task.urgency)
+      setEditingTask(task)
     } else {
-      setEditingTask(null)
       resetForm()
     }
     setModalVisible(true)
   }
 
   const closeForm = () => {
-    resetForm()
     setModalVisible(false)
+    resetForm()
   }
 
-  const handleSave = async () => {
+  const handleSave = () => {
     if (!name.trim()) {
-      Alert.alert("Error", "Por favor ingresa un nombre para la tarea")
+      Alert.alert("Error", "El nombre de la tarea es obligatorio")
       return
     }
 
+    let updatedTasks: Task[]
+
     if (editingTask) {
-      setTasks(
-        tasks.map((t) =>
-          t.id === editingTask.id
-            ? {
-                ...t,
-                name,
-                description,
-                urgency,
-              }
-            : t
-        )
+      // Actualizar tarea existente
+      updatedTasks = tasks.map((t) =>
+        t.id === editingTask.id
+          ? { ...t, name, description, urgency }
+          : t
       )
     } else {
+      // Crear nueva tarea
       const newTask: Task = {
         id: Date.now().toString(),
         name,
         description,
         date: selectedDate,
-        status: "pending" as const,
+        status: "pending",
         urgency,
-      };
+      }
+      updatedTasks = [...tasks, newTask]
       
-      setTasks([...tasks, newTask])
-      await schedulePushNotification(newTask);
+      // Programar notificación para la nueva tarea
+      schedulePushNotification(newTask);
     }
+
+    setTasks(updatedTasks)
+    saveTasks(updatedTasks)
+    updateMarkedDates(updatedTasks)
     closeForm()
   }
 
   const handleDelete = (id: string) => {
-    Alert.alert("Eliminar", "¿Eliminar esta tarea?", [
+    Alert.alert("Confirmar", "¿Estás seguro de eliminar esta tarea?", [
       { text: "Cancelar", style: "cancel" },
       {
         text: "Eliminar",
         style: "destructive",
-        onPress: () => setTasks(tasks.filter((t) => t.id !== id)),
+        onPress: () => {
+          const updatedTasks = tasks.filter((t) => t.id !== id)
+          setTasks(updatedTasks)
+          saveTasks(updatedTasks)
+          updateMarkedDates(updatedTasks)
+        },
       },
     ])
   }
 
   const handleStatusChange = (task: Task) => {
-    const nextStatus: TaskStatus =
-      task.status === "pending"
-        ? "in_progress"
-        : task.status === "in_progress"
-        ? "completed"
-        : "pending"
-    setTasks(tasks.map((t) => (t.id === task.id ? { ...t, status: nextStatus } : t)))
+    const statusOrder: TaskStatus[] = ["pending", "in_progress", "completed"]
+    const currentIndex = statusOrder.indexOf(task.status)
+    const nextIndex = (currentIndex + 1) % statusOrder.length
+    const newStatus = statusOrder[nextIndex]
+
+    const updatedTasks = tasks.map((t) =>
+      t.id === task.id ? { ...t, status: newStatus } : t
+    )
+    setTasks(updatedTasks)
+    saveTasks(updatedTasks)
+    updateMarkedDates(updatedTasks)
   }
 
   const renderTask = ({ item }: { item: Task }) => (
