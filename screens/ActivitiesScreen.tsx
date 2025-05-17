@@ -13,7 +13,7 @@ import {
   Platform,
   AppState,
 } from "react-native"
-import { Calendar, type DateData } from "react-native-calendars"
+import { Calendar, LocaleConfig } from "react-native-calendars"
 import * as Notifications from 'expo-notifications';
 import { useTheme } from "../context/ThemeContext"
 import { Feather } from "@expo/vector-icons"
@@ -58,6 +58,27 @@ const urgencyColors = {
   media: '#FFC107', // Amarillo
   alta: '#F44336'   // Rojo
 }
+
+// Configurar la localización en español
+LocaleConfig.locales['es'] = {
+  monthNames: [
+    'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
+    'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'
+  ],
+  monthNamesShort: [
+    'Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun',
+    'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'
+  ],
+  dayNames: [
+    'Domingo', 'Lunes', 'Martes', 'Miércoles',
+    'Jueves', 'Viernes', 'Sábado'
+  ],
+  dayNamesShort: ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'],
+  today: 'Hoy'
+};
+
+// Establecer el idioma por defecto
+LocaleConfig.defaultLocale = 'es';
 
 export default function ActivitiesScreen() {
   const { colors, theme } = useTheme()
@@ -142,22 +163,58 @@ export default function ActivitiesScreen() {
   // Update marked dates when tasks change
   useEffect(() => {
     const marked: any = {}
+    
+    // Agregar marcador para el día actual con fondo azul
+    const today = format(new Date(), "yyyy-MM-dd")
+    marked[today] = {
+      customStyles: {
+        container: {
+          backgroundColor: '#2196f3',
+          borderRadius: 16,
+        },
+        text: {
+          color: 'white',
+          fontWeight: 'bold',
+        },
+      },
+    }
+    
+    // Agregar marcadores para las tareas
     tasks.forEach((task) => {
-      marked[task.date] = {
-        marked: true,
-        dotColor: statusColors[task.status],
+      if (task.date === today) {
+        // Si hay una tarea en el día actual, mantener el estilo del día actual
+        marked[task.date] = {
+          ...marked[task.date],
+          marked: true,
+          dotColor: statusColors[task.status],
+        }
+      } else {
+        // Para otros días con tareas
+        marked[task.date] = {
+          marked: true,
+          dotColor: statusColors[task.status],
+        }
       }
     })
-    // Add current date marker
-    const today = format(new Date(), "yyyy-MM-dd")
-    if (!marked[today]) {
-      marked[today] = { selected: true, selectedColor: colors.primary }
+    
+    // Agregar marcador para el día seleccionado
+    if (selectedDate !== today) {
+      marked[selectedDate] = {
+        ...(marked[selectedDate] || {}),
+        selected: true,
+        selectedColor: colors.primary,
+      }
     } else {
-      marked[today].selected = true
-      marked[today].selectedColor = colors.primary
+      // Si el día seleccionado es hoy, mantener el fondo azul pero agregar un borde
+      marked[selectedDate] = {
+        ...marked[selectedDate],
+        selected: true,
+        selectedColor: '#1976d2', // Azul más oscuro para la selección
+      }
     }
+    
     setMarkedDates(marked)
-  }, [tasks, colors.primary])
+  }, [tasks, selectedDate, colors.primary])
 
   const handleDayPress = useCallback((day: DateData) => {
     setSelectedDate(day.dateString)
@@ -281,7 +338,9 @@ export default function ActivitiesScreen() {
           style={[styles.deleteButton, { backgroundColor: colors.danger }]}
           onPress={() => handleDelete(item.id)}
         >
-          <Feather name="trash-2" size={16} color="#fff" />
+          <Text style={styles.statusButtonText}>
+            <Feather name="trash-2" size={16} color="#fff" /> Eliminar
+          </Text>
         </TouchableOpacity>
       </View>
     </View>
@@ -291,38 +350,26 @@ export default function ActivitiesScreen() {
     <View style={[styles.container, { backgroundColor: colors.background }]}>
       <Calendar
         onDayPress={handleDayPress}
-        markedDates={{
-          ...markedDates,
-          [selectedDate]: {
-            ...markedDates[selectedDate as keyof typeof markedDates],
-            selected: true,
-            selectedColor: colors.primary,
-          },
-        }}
+        markedDates={markedDates}
+        current={selectedDate}
+        firstDay={1}
+        locale="es"
         theme={{
-          calendarBackground: colors.card,
+          calendarBackground: colors.background,
           textSectionTitleColor: colors.text,
           selectedDayBackgroundColor: colors.primary,
-          selectedDayTextColor: "#ffffff",
-          todayTextColor: colors.primary,
+          selectedDayTextColor: "#fff",
+          todayTextColor: '#ffffff',
           dayTextColor: colors.text,
-          textDisabledColor: colors.secondary,
-          dotColor: colors.primary,
+          textDisabledColor: "#d9e1e8",
           monthTextColor: colors.text,
-          arrowColor: colors.primary,
-          indicatorColor: colors.primary,
-          backgroundColor: colors.background,
-          textSectionTitleDisabledColor: `${colors.secondary}80`,
-          textDisabledColor: `${colors.secondary}80`,
-          textDayFontFamily: "System",
-          textMonthFontFamily: "System",
-          textDayHeaderFontFamily: "System",
-          textDayFontWeight: "300",
-          textMonthFontWeight: "bold",
-          textDayHeaderFontWeight: "300",
-          textDayFontSize: 16,
+          todayBackgroundColor: '#2196f3', // Forzar el fondo azul para el día actual
+          textDayFontWeight: '300',
+          textMonthFontWeight: 'bold',
+          textDayHeaderFontWeight: '300',
+          textDayFontSize: 14,
           textMonthFontSize: 16,
-          textDayHeaderFontSize: 16,
+          textDayHeaderFontSize: 14,
         }}
       />
 
@@ -556,9 +603,16 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   deleteButton: {
-    padding: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
     borderRadius: 15,
     marginLeft: 8,
+    minWidth: 100,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 15,
+    borderWidth: 1,
+    borderColor: 'transparent',
   },
   modalOverlay: {
     flex: 1,
